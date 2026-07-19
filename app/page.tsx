@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { marked } from "marked";
 import {
+  playPcmStream,
+  pcmStreamSupported,
+  type StreamHandle,
+} from "@/lib/audioStream";
+import {
   ArrowUp,
   BookOpen,
   Compass,
@@ -64,6 +69,7 @@ export default function Page() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const streamRef = useRef<StreamHandle | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   // 载入本地历史 + 语音偏好
@@ -85,7 +91,33 @@ export default function Page() {
       a.src = "";
     }
     audioRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.stop();
+      streamRef.current = null;
+    }
     setSpeaking(null);
+  }, []);
+
+  // 降级：一次性拿完整 wav 再播（流式不可用或失败时）
+  const speakWav = useCallback(async (text: string, index: number) => {
+    const res = await fetch(TTS_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, stream: false }),
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    setSpeaking(index);
+    const clear = () => {
+      URL.revokeObjectURL(url);
+      setSpeaking((cur) => (cur === index ? null : cur));
+    };
+    audio.onended = clear;
+    audio.onerror = clear;
+    await audio.play().catch(() => setSpeaking(null));
   }, []);
 
   const speak = useCallback(
@@ -93,32 +125,35 @@ export default function Page() {
       stopAudio();
       const clean = text.trim();
       if (!clean) return;
+
+      // 首选流式播放：首字节即开声
+      if (pcmStreamSupported()) {
+        try {
+          const res = await fetch(TTS_URL, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text: clean }),
+          });
+          if (res.ok && res.body) {
+            const rate = Number(res.headers.get("x-sample-rate")) || 24000;
+            setSpeaking(index);
+            streamRef.current = await playPcmStream(res, rate, () =>
+              setSpeaking((cur) => (cur === index ? null : cur))
+            );
+            return;
+          }
+        } catch {
+          /* 落到 wav 降级 */
+        }
+      }
+
       try {
-        const res = await fetch(TTS_URL, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text: clean }),
-        });
-        if (!res.ok) return;
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        setSpeaking(index);
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          setSpeaking((cur) => (cur === index ? null : cur));
-        };
-        audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          setSpeaking((cur) => (cur === index ? null : cur));
-        };
-        await audio.play().catch(() => setSpeaking(null));
+        await speakWav(clean, index);
       } catch {
         setSpeaking(null);
       }
     },
-    [stopAudio]
+    [stopAudio, speakWav]
   );
 
   const toggleTts = useCallback(() => {
