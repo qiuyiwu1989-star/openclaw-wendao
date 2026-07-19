@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { marked } from "marked";
 import {
   ArrowUp,
+  BookOpen,
   Compass,
   RotateCcw,
   Square,
@@ -245,6 +246,9 @@ export default function Page() {
           </div>
         </div>
         <div className="topbar-actions">
+          <a className="icon-btn" href={`${BASE}/about`} title="关于问道 · 方法">
+            <BookOpen size={18} strokeWidth={1.7} />
+          </a>
           <button
             className={"icon-btn" + (ttsOn ? " icon-btn-on" : "")}
             onClick={toggleTts}
