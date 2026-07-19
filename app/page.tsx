@@ -6,6 +6,7 @@ import {
   ArrowUp,
   BookOpen,
   Compass,
+  Mic,
   RotateCcw,
   Square,
   Volume2,
@@ -13,6 +14,20 @@ import {
 } from "lucide-react";
 
 type Msg = { role: "user" | "assistant"; content: string };
+
+// 浏览器语音识别（Web Speech API）最小类型，避免引入额外依赖
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((e: {
+    results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }>;
+  }) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+};
 
 const STORAGE_KEY = "wendao.chat.v1";
 const TTS_PREF_KEY = "wendao.tts.on";
@@ -43,10 +58,13 @@ export default function Page() {
   const [streaming, setStreaming] = useState(false);
   const [ttsOn, setTtsOn] = useState(true);
   const [speaking, setSpeaking] = useState<number | null>(null);
+  const [listening, setListening] = useState(false);
+  const [micSupported, setMicSupported] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   // 载入本地历史 + 语音偏好
   useEffect(() => {
@@ -224,6 +242,66 @@ export default function Page() {
     }
   }, [streaming, stop, stopAudio]);
 
+  // 语音输入（麦克风）：浏览器原生识别，中文，说完自动发送
+  useEffect(() => {
+    const w = window as unknown as Record<string, unknown>;
+    setMicSupported(!!(w.webkitSpeechRecognition || w.SpeechRecognition));
+  }, []);
+
+  const stopListening = useCallback(() => {
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const startListening = useCallback(() => {
+    if (streaming) return;
+    const w = window as unknown as Record<string, unknown>;
+    const SR = (w.webkitSpeechRecognition || w.SpeechRecognition) as
+      | (new () => SpeechRecognitionLike)
+      | undefined;
+    if (!SR) return;
+    stopAudio();
+    const rec = new SR();
+    rec.lang = "zh-CN";
+    rec.interimResults = true;
+    rec.continuous = false;
+    let finalText = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      finalText = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        const t = r[0]?.transcript || "";
+        if (r.isFinal) finalText += t;
+        else interim += t;
+      }
+      setInput((finalText + interim).trim());
+      autoGrow();
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+      const t = finalText.trim();
+      if (t) send(t);
+    };
+    recognitionRef.current = rec;
+    setListening(true);
+    try {
+      rec.start();
+    } catch {
+      setListening(false);
+    }
+  }, [streaming, stopAudio, autoGrow, send]);
+
+  const toggleMic = useCallback(() => {
+    if (listening) stopListening();
+    else startListening();
+  }, [listening, startListening, stopListening]);
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
@@ -332,11 +410,23 @@ export default function Page() {
       )}
 
       <div className="composer">
-        <div className="composer-inner">
+        <div className={"composer-inner" + (listening ? " composer-listening" : "")}>
+          {micSupported && (
+            <button
+              className={"mic-btn" + (listening ? " mic-btn-on" : "")}
+              onClick={toggleMic}
+              disabled={streaming}
+              title={listening ? "在听……点击结束" : "语音输入"}
+            >
+              <Mic size={18} strokeWidth={1.8} />
+            </button>
+          )}
           <textarea
             ref={taRef}
             value={input}
-            placeholder="说说你正在纠结、想不通的那件事……"
+            placeholder={
+              listening ? "在听……说完自动发送" : "说说你正在纠结、想不通的那件事……"
+            }
             rows={1}
             onChange={(e) => {
               setInput(e.target.value);
@@ -360,7 +450,9 @@ export default function Page() {
           )}
         </div>
         <p className="composer-hint">
-          问道会把回答读给你听 · 短而准，一句话点醒 · Enter 发送
+          {micSupported
+            ? "点麦克风说，或打字都行 · 问道会把回答读给你听"
+            : "问道会把回答读给你听 · 短而准，一句话点醒 · Enter 发送"}
         </p>
       </div>
     </div>

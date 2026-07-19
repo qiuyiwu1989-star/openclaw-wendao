@@ -403,6 +403,51 @@ button {
   border-color: var(--accent);
 }
 
+.composer-listening {
+  border-color: var(--accent);
+}
+
+.mic-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  display: grid;
+  place-items: center;
+  transition: all 0.15s;
+  align-self: flex-end;
+}
+
+.mic-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.mic-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.mic-btn-on {
+  color: #12141a;
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: mic-pulse 1.3s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
 textarea {
   flex: 1;
   resize: none;

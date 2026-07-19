@@ -24,7 +24,7 @@ cp .env.example .env.local
 
 **PM2（跟 shennao 一致的话优先用这个）：**
 ```bash
-pm2 start npm --name wendao -- run start
+pm2 start ecosystem.config.js   # 或：pm2 start npm --name wendao -- run start
 pm2 save
 ```
 
@@ -77,6 +77,12 @@ location /wendao/ {
 
 > **关键**：`proxy_buffering off;` —— 不关掉的话流式回复会被 nginx 攒着一次性吐出，失去逐字打字的体验。健康检查判「服务器有没有响应」（000/5xx 才算挂），不死等具体 code。
 
+**签 HTTPS 证书（必做）：**
+```bash
+sudo certbot --nginx -d wendao.zaowuyun.com
+```
+> 语音输入（麦克风）依赖浏览器的**安全上下文**——只有 HTTPS 下才能用，HTTP 会被浏览器禁掉。所以证书不是可选项。
+
 ## 更新上线
 
 ```bash
@@ -92,5 +98,7 @@ pm2 restart wendao      # 或 systemctl restart wendao
 - [ ] `curl -s -o /dev/null -w '%{http_code}' https://<域名>/` → 200
 - [ ] 首页能打开、能发一条消息、能看到逐字流式回复
 - [ ] 回答播放出语音（TTS），点喇叭能静音、点「朗读」能重听
+- [ ] 麦克风语音输入可用（需 HTTPS + Chrome/Edge，说完自动发送）
+- [ ] `/about` 关于·方法页能打开
 - [ ] `.env.local` 权限收紧（`chmod 600`），且不在 git 里
 - [ ] 发布窗口：用户在用时冻结重启
