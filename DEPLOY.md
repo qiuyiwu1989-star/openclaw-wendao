@@ -95,6 +95,7 @@ pm2 restart wendao      # 或 systemctl restart wendao
 
 ## 上线自检
 
+- [ ] `curl -s https://<域名>/api/health` → `{"ok":true,...,"llmConfigured":true}`
 - [ ] `curl -s -o /dev/null -w '%{http_code}' https://<域名>/` → 200
 - [ ] 首页能打开、能发一条消息、能看到逐字流式回复
 - [ ] 回答播放出语音（TTS），点喇叭能静音、点「朗读」能重听
