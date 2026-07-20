@@ -65,7 +65,8 @@ export async function POST(req: Request) {
   const fast = (body as { fast?: unknown })?.fast === true;
 
   const client = new Anthropic({ apiKey, baseURL: `${LLM_BASE}/anthropic` });
-  const system = buildSystemPrompt();
+  // 语音模式用精简提示词抢延迟；打字/深度模式用完整版
+  const system = buildSystemPrompt(fast);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
