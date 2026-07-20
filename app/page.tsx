@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { marked } from "marked";
 import {
-  playPcmStream,
-  pcmStreamSupported,
-  type StreamHandle,
-} from "@/lib/audioStream";
+  createSpeechQueue,
+  speechSupported,
+  takeSentences,
+  type SpeechQueue,
+} from "@/lib/speechQueue";
 import {
   ArrowUp,
   BookOpen,
@@ -69,7 +70,7 @@ export default function Page() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const streamRef = useRef<StreamHandle | null>(null);
+  const speechRef = useRef<SpeechQueue | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   // 载入本地历史 + 语音偏好
@@ -91,14 +92,14 @@ export default function Page() {
       a.src = "";
     }
     audioRef.current = null;
-    if (streamRef.current) {
-      streamRef.current.stop();
-      streamRef.current = null;
+    if (speechRef.current) {
+      speechRef.current.stop();
+      speechRef.current = null;
     }
     setSpeaking(null);
   }, []);
 
-  // 降级：一次性拿完整 wav 再播（流式不可用或失败时）
+  // 降级：一次性拿完整 wav 再播（Web Audio 不可用时）
   const speakWav = useCallback(async (text: string, index: number) => {
     const res = await fetch(TTS_URL, {
       method: "POST",
@@ -120,40 +121,36 @@ export default function Page() {
     await audio.play().catch(() => setSpeaking(null));
   }, []);
 
+  // 新建一个句级语音队列（自动播放 + 手动重听共用）
+  const newQueue = useCallback((index: number): SpeechQueue => {
+    const q = createSpeechQueue({
+      url: TTS_URL,
+      onStart: () => setSpeaking(index),
+      onDrain: () => setSpeaking((cur) => (cur === index ? null : cur)),
+    });
+    speechRef.current = q;
+    return q;
+  }, []);
+
+  // 手动重听整段：整段作为一句推进队列
   const speak = useCallback(
     async (text: string, index: number) => {
       stopAudio();
       const clean = text.trim();
       if (!clean) return;
-
-      // 首选流式播放：首字节即开声
-      if (pcmStreamSupported()) {
-        try {
-          const res = await fetch(TTS_URL, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ text: clean }),
-          });
-          if (res.ok && res.body) {
-            const rate = Number(res.headers.get("x-sample-rate")) || 24000;
-            setSpeaking(index);
-            streamRef.current = await playPcmStream(res, rate, () =>
-              setSpeaking((cur) => (cur === index ? null : cur))
-            );
-            return;
-          }
-        } catch {
-          /* 落到 wav 降级 */
-        }
+      if (speechSupported()) {
+        const q = newQueue(index);
+        q.push(clean);
+        q.end();
+        return;
       }
-
       try {
         await speakWav(clean, index);
       } catch {
         setSpeaking(null);
       }
     },
-    [stopAudio, speakWav]
+    [stopAudio, speakWav, newQueue]
   );
 
   const toggleTts = useCallback(() => {
@@ -214,7 +211,8 @@ export default function Page() {
         const res = await fetch(API_URL, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ messages: next }),
+          // fast=ttsOn：要听语音就走无思考抢延迟；纯打字保留思考
+          body: JSON.stringify({ messages: next, fast: ttsOn }),
           signal: controller.signal,
         });
 
@@ -226,6 +224,11 @@ export default function Page() {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         const assistantIndex = next.length;
+
+        // 句级流式朗读：整句一出就推进队列，不等整段
+        const pipeline = ttsOn && speechSupported();
+        const queue = pipeline ? newQueue(assistantIndex) : null;
+        let spokenLen = 0;
         let acc = "";
         while (true) {
           const { done, value } = await reader.read();
@@ -236,8 +239,20 @@ export default function Page() {
             copy[copy.length - 1] = { role: "assistant", content: acc };
             return copy;
           });
+          if (queue) {
+            const { segments, next: n } = takeSentences(acc, spokenLen);
+            for (const s of segments) queue.push(s);
+            spokenLen = n;
+          }
         }
-        if (ttsOn && acc.trim()) speak(acc, assistantIndex);
+        if (queue) {
+          const tail = acc.slice(spokenLen).trim();
+          if (tail) queue.push(tail);
+          queue.end();
+        } else if (ttsOn && acc.trim()) {
+          // Web Audio 不可用：整段 wav 降级
+          speak(acc, assistantIndex);
+        }
       } catch (err) {
         if ((err as Error).name === "AbortError") {
           // 用户主动停止：保留已生成内容
@@ -258,7 +273,7 @@ export default function Page() {
         abortRef.current = null;
       }
     },
-    [messages, streaming, ttsOn, speak]
+    [messages, streaming, ttsOn, speak, newQueue]
   );
 
   const stop = useCallback(() => {

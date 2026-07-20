@@ -60,6 +60,10 @@ export async function POST(req: Request) {
     });
   }
 
+  // fast=true（语音/通话模式）：关掉 MiMo 的"思考"，首句延迟砍掉近一半。
+  // 打字/静默模式保留思考，不牺牲难题的锐度。
+  const fast = (body as { fast?: unknown })?.fast === true;
+
   const client = new Anthropic({ apiKey, baseURL: `${LLM_BASE}/anthropic` });
   const system = buildSystemPrompt();
 
@@ -67,13 +71,18 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const anthropicStream = client.messages.stream({
+        const params: Record<string, unknown> = {
           model: MODEL,
           max_tokens: MAX_TOKENS,
           // 系统提示词很长且每次相同，MiMo 网关会自动做 prompt cache
           system,
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        });
+        };
+        // MiMo 默认会先"思考"再开口；语音模式显式关闭以抢延迟
+        if (fast) params.thinking = { type: "disabled" };
+        const anthropicStream = client.messages.stream(
+          params as unknown as Parameters<typeof client.messages.stream>[0]
+        );
 
         anthropicStream.on("text", (delta) => {
           controller.enqueue(encoder.encode(delta));
