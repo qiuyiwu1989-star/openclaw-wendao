@@ -9,6 +9,11 @@ import {
   type SpeechQueue,
 } from "@/lib/speechQueue";
 import {
+  startVoiceCapture,
+  recorderSupported,
+  type VoiceCapture,
+} from "@/lib/recorder";
+import {
   ArrowUp,
   BookOpen,
   Compass,
@@ -23,25 +28,12 @@ import {
 
 type Msg = { role: "user" | "assistant"; content: string };
 
-// 浏览器语音识别（Web Speech API）最小类型，避免引入额外依赖
-type SpeechRecognitionLike = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start: () => void;
-  stop: () => void;
-  onresult: ((e: {
-    results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }>;
-  }) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-};
-
 const STORAGE_KEY = "wendao.chat.v1";
 const TTS_PREF_KEY = "wendao.tts.on";
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const API_URL = `${BASE}/api/chat`;
 const TTS_URL = `${BASE}/api/tts`;
+const ASR_URL = `${BASE}/api/asr`;
 
 const STARTERS = [
   "我该不该辞职去创业？",
@@ -67,6 +59,7 @@ export default function Page() {
   const [ttsOn, setTtsOn] = useState(true);
   const [speaking, setSpeaking] = useState<number | null>(null);
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [micSupported, setMicSupported] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -74,7 +67,7 @@ export default function Page() {
   const [callMode, setCallMode] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speechRef = useRef<SpeechQueue | null>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const captureRef = useRef<VoiceCapture | null>(null);
   const callActiveRef = useRef(false);
   const relistenRef = useRef<(() => void) | null>(null);
 
@@ -301,102 +294,106 @@ export default function Page() {
     }
   }, [streaming, stop, stopAudio]);
 
-  // 语音输入（麦克风）：浏览器原生识别，中文，说完自动发送
+  // 语音输入：MediaRecorder + VAD 录音 → MiMo ASR 转写（不用浏览器 Web Speech，
+  // 后者走谷歌服务器国内被墙）。说完静音自动收尾。
   useEffect(() => {
-    const w = window as unknown as Record<string, unknown>;
-    setMicSupported(!!(w.webkitSpeechRecognition || w.SpeechRecognition));
+    setMicSupported(recorderSupported());
   }, []);
 
-  const stopListening = useCallback(() => {
+  const transcribe = useCallback(async (wav: Blob): Promise<string> => {
     try {
-      recognitionRef.current?.stop();
+      const res = await fetch(ASR_URL, {
+        method: "POST",
+        headers: { "content-type": "audio/wav" },
+        body: wav,
+      });
+      if (!res.ok) return "";
+      const j = (await res.json()) as { text?: string };
+      return (j.text || "").trim();
     } catch {
-      /* ignore */
+      return "";
     }
   }, []);
 
-  const startListening = useCallback(() => {
+  const stopCapture = useCallback(() => {
+    captureRef.current?.stop();
+  }, []);
+
+  const listen = useCallback(async () => {
     if (streaming) return;
-    const w = window as unknown as Record<string, unknown>;
-    const SR = (w.webkitSpeechRecognition || w.SpeechRecognition) as
-      | (new () => SpeechRecognitionLike)
-      | undefined;
-    if (!SR) return;
     stopAudio();
-    const rec = new SR();
-    rec.lang = "zh-CN";
-    rec.interimResults = true;
-    rec.continuous = false;
-    let finalText = "";
-    rec.onresult = (e) => {
-      let interim = "";
-      finalText = "";
-      for (let i = 0; i < e.results.length; i++) {
-        const r = e.results[i];
-        const t = r[0]?.transcript || "";
-        if (r.isFinal) finalText += t;
-        else interim += t;
-      }
-      setInput((finalText + interim).trim());
-      autoGrow();
-    };
-    rec.onerror = () => {
-      setListening(false);
-      // 通话模式没听到声音就继续等（不退出）
-      if (callActiveRef.current)
-        setTimeout(() => callActiveRef.current && startListening(), 500);
-    };
-    rec.onend = () => {
-      setListening(false);
-      recognitionRef.current = null;
-      const t = finalText.trim();
-      if (t) send(t);
-      else if (callActiveRef.current)
-        setTimeout(() => callActiveRef.current && startListening(), 400);
-    };
-    recognitionRef.current = rec;
     setListening(true);
+    const relisten = () => {
+      if (callActiveRef.current)
+        setTimeout(() => callActiveRef.current && relistenRef.current?.(), 350);
+    };
     try {
-      rec.start();
+      captureRef.current = await startVoiceCapture({
+        onResult: async (wav) => {
+          captureRef.current = null;
+          setListening(false);
+          setTranscribing(true);
+          const text = await transcribe(wav);
+          setTranscribing(false);
+          if (text) {
+            setInput(text);
+            send(text);
+          } else relisten();
+        },
+        onNoSpeech: () => {
+          captureRef.current = null;
+          setListening(false);
+          relisten();
+        },
+        onError: () => {
+          captureRef.current = null;
+          setListening(false);
+        },
+      });
     } catch {
       setListening(false);
     }
-  }, [streaming, stopAudio, autoGrow, send]);
+  }, [streaming, stopAudio, transcribe, send]);
 
-  relistenRef.current = startListening;
+  relistenRef.current = listen;
 
   const toggleMic = useCallback(() => {
-    if (listening) stopListening();
-    else startListening();
-  }, [listening, startListening, stopListening]);
+    if (listening) stopCapture();
+    else listen();
+  }, [listening, listen, stopCapture]);
 
   const startCall = useCallback(() => {
     callActiveRef.current = true;
     setCallMode(true);
     if (!ttsOn) toggleTts(); // 通话必须能出声
     stopAudio();
-    startListening();
-  }, [ttsOn, toggleTts, stopAudio, startListening]);
+    listen();
+  }, [ttsOn, toggleTts, stopAudio, listen]);
 
   const endCall = useCallback(() => {
     callActiveRef.current = false;
     setCallMode(false);
-    stopListening();
+    captureRef.current?.cancel();
+    captureRef.current = null;
+    setListening(false);
+    setTranscribing(false);
     stopAudio();
     if (streaming) abortRef.current?.abort();
     setInput("");
-  }, [stopListening, stopAudio, streaming]);
+  }, [stopAudio, streaming]);
 
   // 通话中点一下：打断当前（跳过问道正在说/在想的），立刻回到听
   const interruptCall = useCallback(() => {
     if (streaming) abortRef.current?.abort();
+    captureRef.current?.cancel();
+    captureRef.current = null;
     stopAudio();
-    setTimeout(() => callActiveRef.current && startListening(), 150);
-  }, [streaming, stopAudio, startListening]);
+    setTimeout(() => callActiveRef.current && listen(), 150);
+  }, [streaming, stopAudio, listen]);
 
   const callPhase = speaking !== null
     ? "speaking"
-    : streaming
+    : streaming || transcribing
     ? "thinking"
     : listening
     ? "listening"
@@ -557,7 +554,7 @@ export default function Page() {
             <button
               className={"mic-btn" + (listening ? " mic-btn-on" : "")}
               onClick={toggleMic}
-              disabled={streaming}
+              disabled={streaming || transcribing}
               title={listening ? "在听……点击结束" : "语音输入"}
             >
               <Mic size={18} strokeWidth={1.8} />
@@ -567,7 +564,11 @@ export default function Page() {
             ref={taRef}
             value={input}
             placeholder={
-              listening ? "在听……说完自动发送" : "说说你正在纠结、想不通的那件事……"
+              transcribing
+                ? "识别中……"
+                : listening
+                ? "在听……说完自动发送"
+                : "说说你正在纠结、想不通的那件事……"
             }
             rows={1}
             onChange={(e) => {
