@@ -21,12 +21,17 @@ export async function POST(req: Request) {
     return jsonErr("未配置 LLM_API_KEY", 500);
   }
 
+  // 先看声明的长度，挡掉超大上传（录音本该几十~几百 KB）
+  const declared = Number(req.headers.get("content-length") || 0);
+  if (declared > 8_000_000) return jsonErr("音频过大", 413);
+
   let bytes: ArrayBuffer;
   try {
     bytes = await req.arrayBuffer();
   } catch {
     return jsonErr("读取音频失败", 400);
   }
+  if (bytes.byteLength > 8_000_000) return jsonErr("音频过大", 413);
   if (bytes.byteLength < 1200) {
     // 太短基本是没说话/噪声
     return new Response(JSON.stringify({ text: "" }), {
@@ -34,9 +39,7 @@ export async function POST(req: Request) {
     });
   }
 
-  const format =
-    new URL(req.url).searchParams.get("format") ||
-    (req.headers.get("content-type")?.includes("wav") ? "wav" : "wav");
+  const format = new URL(req.url).searchParams.get("format") || "wav";
   const b64 = Buffer.from(bytes).toString("base64");
 
   try {
@@ -61,7 +64,8 @@ export async function POST(req: Request) {
 
     if (!upstream.ok) {
       const detail = await upstream.text().catch(() => "");
-      return jsonErr(`ASR 失败(${upstream.status}) ${detail}`.trim(), 502);
+      console.error("[asr] upstream", upstream.status, detail.slice(0, 300));
+      return jsonErr("语音识别失败", 502);
     }
     const json = (await upstream.json()) as {
       choices?: { message?: { content?: string } }[];

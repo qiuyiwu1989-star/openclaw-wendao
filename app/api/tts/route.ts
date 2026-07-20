@@ -66,7 +66,8 @@ export async function POST(req: Request) {
 
   if (!upstream.ok || !upstream.body) {
     const detail = await upstream.text().catch(() => "");
-    return jsonErr(`TTS 失败(${upstream.status}) ${detail}`.trim(), 502);
+    console.error("[tts] upstream", upstream.status, detail.slice(0, 300));
+    return jsonErr("语音合成失败", 502);
   }
 
   // 非流式：解出整段 wav

@@ -40,11 +40,22 @@ export function rateLimit(
   return { ok: true, retryAfter: 0 };
 }
 
-/** 从请求头取客户端 IP（nginx 反代后取 X-Forwarded-For / X-Real-IP） */
+/**
+ * 取客户端 IP。**必须信任 nginx 用 $remote_addr 注入的 X-Real-IP**（真实 TCP 对端，
+ * nginx 会覆盖客户端自带值，无法伪造）。绝不能取 X-Forwarded-For 的第一个值——
+ * nginx 的 $proxy_add_x_forwarded_for 会把客户端自带的 XFF 追加在最前，
+ * 取 [0] 等于取攻击者可控值，限流会被塞随机 XFF 直接绕过。
+ * 兜底才用 XFF，且取**最后一跳**（最接近可信的一段）。
+ */
 export function clientIp(req: Request): string {
+  const real = req.headers.get("x-real-ip");
+  if (real && real.trim()) return real.trim();
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") || "unknown";
+  if (xff) {
+    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return "unknown";
 }
 
 /** 便捷包装：超限直接返回 429 Response，否则返回 null 放行 */

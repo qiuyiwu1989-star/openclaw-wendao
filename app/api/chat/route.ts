@@ -15,9 +15,12 @@ type IncomingMessage = {
   content: string;
 };
 
+const MAX_TURNS = 40; // 最近 N 条，挡超长历史刷 token
+const MAX_CHARS_PER_MSG = 8000;
+
 function sanitize(messages: unknown): IncomingMessage[] {
   if (!Array.isArray(messages)) return [];
-  const cleaned: IncomingMessage[] = [];
+  let cleaned: IncomingMessage[] = [];
   for (const m of messages) {
     if (
       m &&
@@ -26,12 +29,21 @@ function sanitize(messages: unknown): IncomingMessage[] {
       typeof m.content === "string" &&
       m.content.trim().length > 0
     ) {
-      cleaned.push({ role: m.role, content: m.content });
+      cleaned.push({ role: m.role, content: m.content.slice(0, MAX_CHARS_PER_MSG) });
     }
   }
-  // Anthropic 要求首条为 user，最后一条为 user
+  // 只保留最近 MAX_TURNS 条
+  if (cleaned.length > MAX_TURNS) cleaned = cleaned.slice(-MAX_TURNS);
+  // Anthropic 要求首条为 user
   while (cleaned.length && cleaned[0].role !== "user") cleaned.shift();
-  return cleaned;
+  // 折叠连续同角色（上游要求严格交替，否则报错）
+  const merged: IncomingMessage[] = [];
+  for (const m of cleaned) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === m.role) last.content += "\n" + m.content;
+    else merged.push({ ...m });
+  }
+  return merged;
 }
 
 export async function POST(req: Request) {
@@ -96,10 +108,9 @@ export async function POST(req: Request) {
         await anthropicStream.finalMessage();
         controller.close();
       } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : "对话生成失败，请稍后重试";
-        // 把错误作为可见文本推给前端，避免静默空白
-        controller.enqueue(encoder.encode(`\n\n[问道遇到问题：${msg}]`));
+        console.error("[chat] upstream error:", err);
+        // 只给用户泛化文案，不透传上游细节（可能含内部 URL/网关信息）
+        controller.enqueue(encoder.encode(`\n\n[问道这会儿有点忙，稍后再试试]`));
         controller.close();
       }
     },

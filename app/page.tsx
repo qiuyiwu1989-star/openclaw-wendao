@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import {
   createSpeechQueue,
   speechSupported,
@@ -54,7 +55,10 @@ marked.setOptions({ breaks: true, gfm: true });
 
 function renderMarkdown(text: string): string {
   try {
-    return marked.parse(text) as string;
+    const html = marked.parse(text) as string;
+    // 消毒：LLM 输出经 markdown→HTML 后可能含 <script>/onerror 等，直插 DOM 有 XSS 风险
+    if (typeof window === "undefined") return html; // SSR 不会带内容走到这
+    return DOMPurify.sanitize(html);
   } catch {
     return text;
   }
@@ -79,6 +83,7 @@ export default function Page() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speechRef = useRef<SpeechQueue | null>(null);
   const captureRef = useRef<VoiceCapture | null>(null);
+  const capturingRef = useRef(false);
   const callActiveRef = useRef(false);
   const relistenRef = useRef<(() => void) | null>(null);
 
@@ -94,6 +99,16 @@ export default function Page() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  // 卸载时释放所有在途资源（未来若改 SPA 路由不至于泄漏 AudioContext/麦克风/请求）
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      audioRef.current?.pause();
+      speechRef.current?.stop();
+      captureRef.current?.cancel();
+    };
   }, []);
 
   const stopAudio = useCallback(() => {
@@ -192,10 +207,11 @@ export default function Page() {
     });
   }, [stopAudio]);
 
-  // 持久化
+  // 持久化（只存最近 80 条，避免历史无限增长撑爆 localStorage 后静默失效）
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+      const slim = messages.length > 80 ? messages.slice(-80) : messages;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
     } catch {
       /* ignore */
     }
@@ -344,34 +360,43 @@ export default function Page() {
   }, []);
 
   const listen = useCallback(async () => {
-    if (streaming) return;
+    // capturingRef 是同步门闩：挡住重入（双击/relisten 撞车）导致重复开麦、MediaStream 泄漏
+    if (streaming || capturingRef.current) return;
+    capturingRef.current = true;
+    const startedInCall = callActiveRef.current;
     stopAudio();
     setListening(true);
+    const finishCapture = () => {
+      capturingRef.current = false;
+      captureRef.current = null;
+      setListening(false);
+    };
+    // 挂断竞态：这轮采集若在通话结束后才出结果，丢弃
+    const stale = () => startedInCall && !callActiveRef.current;
     const relisten = () => {
       if (callActiveRef.current)
         setTimeout(() => callActiveRef.current && relistenRef.current?.(), 350);
     };
     try {
-      captureRef.current = await startVoiceCapture({
+      const cap = await startVoiceCapture({
         onResult: async (wav) => {
-          captureRef.current = null;
-          setListening(false);
+          finishCapture();
+          if (stale()) return;
           setTranscribing(true);
           const text = await transcribe(wav);
           setTranscribing(false);
+          if (stale()) return;
           if (text) {
             setInput(text);
             send(text);
           } else relisten();
         },
         onNoSpeech: () => {
-          captureRef.current = null;
-          setListening(false);
+          finishCapture();
           relisten();
         },
         onError: (e) => {
-          captureRef.current = null;
-          setListening(false);
+          finishCapture();
           const name = (e as { name?: string } | undefined)?.name || "";
           if (/NotAllowed|Security|Permission/i.test(name)) {
             // 权限被拒：别无限重试，退出通话并提示
@@ -383,17 +408,27 @@ export default function Page() {
           }
         },
       });
+      // getUserMedia 授权期间被挂断：释放刚开的采集，别让麦克风常亮
+      if (stale()) {
+        cap.cancel();
+        finishCapture();
+        return;
+      }
+      captureRef.current = cap;
     } catch {
-      setListening(false);
+      finishCapture();
     }
   }, [streaming, stopAudio, transcribe, send]);
 
-  relistenRef.current = listen;
+  useEffect(() => {
+    relistenRef.current = listen;
+  }, [listen]);
 
   // 进通话前预热 MiMo prompt cache：偷偷发一个 fast 请求跑完系统提示词 prefill，
   // 让第一轮不吃冷启动的几秒。拿到首字节就断（缓存已暖），不影响 UI。
   const prewarm = useCallback(() => {
     const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 6000); // 兜底：别留悬挂请求
     fetch(API_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -403,9 +438,10 @@ export default function Page() {
       .then(async (res) => {
         const reader = res.body?.getReader();
         await reader?.read(); // 收到第一块即说明 prefill 完成、缓存已暖
+        clearTimeout(timer);
         ac.abort();
       })
-      .catch(() => {});
+      .catch(() => clearTimeout(timer));
   }, []);
 
   const toggleMic = useCallback(() => {
@@ -428,6 +464,7 @@ export default function Page() {
     setCallMode(false);
     captureRef.current?.cancel();
     captureRef.current = null;
+    capturingRef.current = false;
     setListening(false);
     setTranscribing(false);
     stopAudio();
@@ -440,6 +477,7 @@ export default function Page() {
     if (streaming) abortRef.current?.abort();
     captureRef.current?.cancel();
     captureRef.current = null;
+    capturingRef.current = false;
     stopAudio();
     setTimeout(() => callActiveRef.current && listen(), 150);
   }, [streaming, stopAudio, listen]);
