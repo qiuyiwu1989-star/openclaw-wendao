@@ -61,6 +61,7 @@ export default function Page() {
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [micSupported, setMicSupported] = useState(false);
+  const [micDenied, setMicDenied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -345,9 +346,18 @@ export default function Page() {
           setListening(false);
           relisten();
         },
-        onError: () => {
+        onError: (e) => {
           captureRef.current = null;
           setListening(false);
+          const name = (e as { name?: string } | undefined)?.name || "";
+          if (/NotAllowed|Security|Permission/i.test(name)) {
+            // 权限被拒：别无限重试，退出通话并提示
+            callActiveRef.current = false;
+            setCallMode(false);
+            setMicDenied(true);
+          } else {
+            relisten(); // 瞬时错误：通话中重试
+          }
         },
       });
     } catch {
@@ -357,18 +367,38 @@ export default function Page() {
 
   relistenRef.current = listen;
 
+  // 进通话前预热 MiMo prompt cache：偷偷发一个 fast 请求跑完系统提示词 prefill，
+  // 让第一轮不吃冷启动的几秒。拿到首字节就断（缓存已暖），不影响 UI。
+  const prewarm = useCallback(() => {
+    const ac = new AbortController();
+    fetch(API_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "在吗" }], fast: true }),
+      signal: ac.signal,
+    })
+      .then(async (res) => {
+        const reader = res.body?.getReader();
+        await reader?.read(); // 收到第一块即说明 prefill 完成、缓存已暖
+        ac.abort();
+      })
+      .catch(() => {});
+  }, []);
+
   const toggleMic = useCallback(() => {
     if (listening) stopCapture();
     else listen();
   }, [listening, listen, stopCapture]);
 
   const startCall = useCallback(() => {
+    setMicDenied(false);
     callActiveRef.current = true;
     setCallMode(true);
     if (!ttsOn) toggleTts(); // 通话必须能出声
     stopAudio();
+    prewarm(); // 用户授权麦克风/开口这几秒里把缓存焐热
     listen();
-  }, [ttsOn, toggleTts, stopAudio, listen]);
+  }, [ttsOn, toggleTts, stopAudio, listen, prewarm]);
 
   const endCall = useCallback(() => {
     callActiveRef.current = false;
@@ -593,7 +623,9 @@ export default function Page() {
           )}
         </div>
         <p className="composer-hint">
-          {micSupported
+          {micDenied
+            ? "麦克风没授权——点地址栏左侧的锁/图标，允许麦克风后再试"
+            : micSupported
             ? "点麦克风说，或打字都行 · 问道会把回答读给你听"
             : "问道会把回答读给你听 · 短而准，一句话点醒 · Enter 发送"}
         </p>
