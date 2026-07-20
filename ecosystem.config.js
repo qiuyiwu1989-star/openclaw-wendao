@@ -9,7 +9,7 @@ module.exports = {
       cwd: __dirname,
       env: {
         NODE_ENV: "production",
-        PORT: "3200",
+        PORT: process.env.PORT || "3200",
       },
       // 密钥来自同目录 .env.local（Next 自动加载），不写在这里
       max_restarts: 10,
