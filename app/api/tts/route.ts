@@ -81,24 +81,38 @@ export async function POST(req: Request) {
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // 用 start 自驱读循环（不用 pull 的背压模型，避免收到 [DONE] 后仍挂住连接）
   const out = new ReadableStream<Uint8Array>({
-    async pull(controller) {
+    async start(controller) {
       try {
-        const { done, value } = await reader.read();
-        if (done) {
-          if (buffer.trim()) emit(buffer, controller);
-          controller.close();
-          return;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 1);
-          emit(line, controller);
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx: number;
+          let stop = false;
+          while ((idx = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            // 收到 [DONE] 立即收尾——MiMo 发完不一定关连接，
+            // 死等 socket 关闭会把响应挂到超时。
+            if (isDone(line)) {
+              stop = true;
+              break;
+            }
+            emit(line, controller);
+          }
+          if (stop) break;
         }
       } catch {
-        controller.close();
+        /* 读流出错：照常收尾 */
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+        reader.cancel().catch(() => {});
       }
     },
     cancel() {
@@ -113,6 +127,11 @@ export async function POST(req: Request) {
       "cache-control": "no-store",
     },
   });
+}
+
+function isDone(line: string): boolean {
+  const t = line.trim();
+  return t.startsWith("data:") && t.slice(5).trim() === "[DONE]";
 }
 
 function emit(line: string, controller: ReadableStreamDefaultController<Uint8Array>) {
