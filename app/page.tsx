@@ -13,6 +13,8 @@ import {
   BookOpen,
   Compass,
   Mic,
+  Phone,
+  PhoneOff,
   RotateCcw,
   Square,
   Volume2,
@@ -69,9 +71,12 @@ export default function Page() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [callMode, setCallMode] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speechRef = useRef<SpeechQueue | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const callActiveRef = useRef(false);
+  const relistenRef = useRef<(() => void) | null>(null);
 
   // 载入本地历史 + 语音偏好
   useEffect(() => {
@@ -126,7 +131,11 @@ export default function Page() {
     const q = createSpeechQueue({
       url: TTS_URL,
       onStart: () => setSpeaking(index),
-      onDrain: () => setSpeaking((cur) => (cur === index ? null : cur)),
+      onDrain: () => {
+        setSpeaking((cur) => (cur === index ? null : cur));
+        // 通话模式：问道说完，自动接着听用户
+        if (callActiveRef.current) relistenRef.current?.();
+      },
     });
     speechRef.current = q;
     return q;
@@ -331,12 +340,19 @@ export default function Page() {
       setInput((finalText + interim).trim());
       autoGrow();
     };
-    rec.onerror = () => setListening(false);
+    rec.onerror = () => {
+      setListening(false);
+      // 通话模式没听到声音就继续等（不退出）
+      if (callActiveRef.current)
+        setTimeout(() => callActiveRef.current && startListening(), 500);
+    };
     rec.onend = () => {
       setListening(false);
       recognitionRef.current = null;
       const t = finalText.trim();
       if (t) send(t);
+      else if (callActiveRef.current)
+        setTimeout(() => callActiveRef.current && startListening(), 400);
     };
     recognitionRef.current = rec;
     setListening(true);
@@ -347,10 +363,44 @@ export default function Page() {
     }
   }, [streaming, stopAudio, autoGrow, send]);
 
+  relistenRef.current = startListening;
+
   const toggleMic = useCallback(() => {
     if (listening) stopListening();
     else startListening();
   }, [listening, startListening, stopListening]);
+
+  const startCall = useCallback(() => {
+    callActiveRef.current = true;
+    setCallMode(true);
+    if (!ttsOn) toggleTts(); // 通话必须能出声
+    stopAudio();
+    startListening();
+  }, [ttsOn, toggleTts, stopAudio, startListening]);
+
+  const endCall = useCallback(() => {
+    callActiveRef.current = false;
+    setCallMode(false);
+    stopListening();
+    stopAudio();
+    if (streaming) abortRef.current?.abort();
+    setInput("");
+  }, [stopListening, stopAudio, streaming]);
+
+  // 通话中点一下：打断当前（跳过问道正在说/在想的），立刻回到听
+  const interruptCall = useCallback(() => {
+    if (streaming) abortRef.current?.abort();
+    stopAudio();
+    setTimeout(() => callActiveRef.current && startListening(), 150);
+  }, [streaming, stopAudio, startListening]);
+
+  const callPhase = speaking !== null
+    ? "speaking"
+    : streaming
+    ? "thinking"
+    : listening
+    ? "listening"
+    : "idle";
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -374,6 +424,15 @@ export default function Page() {
           </div>
         </div>
         <div className="topbar-actions">
+          {micSupported && (
+            <button
+              className="icon-btn"
+              onClick={startCall}
+              title="通话模式（免手对话）"
+            >
+              <Phone size={18} strokeWidth={1.7} />
+            </button>
+          )}
           <a className="icon-btn" href={`${BASE}/about`} title="关于问道 · 方法">
             <BookOpen size={18} strokeWidth={1.7} />
           </a>
@@ -395,6 +454,39 @@ export default function Page() {
           )}
         </div>
       </header>
+
+      {callMode && (
+        <div className="call" role="dialog" aria-modal="true">
+          <div className="call-inner">
+            <div className="call-title">通话模式</div>
+            <button
+              className={`call-orb call-${callPhase}`}
+              onClick={interruptCall}
+              title="点一下可打断"
+            >
+              <Compass size={44} strokeWidth={1.2} />
+            </button>
+            <div className="call-state">
+              {callPhase === "listening"
+                ? "在听你说……"
+                : callPhase === "thinking"
+                ? "问道在想……"
+                : callPhase === "speaking"
+                ? "问道在说……"
+                : "……"}
+            </div>
+            <div className="call-hint">
+              {callPhase === "speaking" || callPhase === "thinking"
+                ? "点圆圈可打断，直接说"
+                : "说完停一下，问道自然会接话"}
+            </div>
+            <button className="call-end" onClick={endCall}>
+              <PhoneOff size={18} strokeWidth={1.9} />
+              结束通话
+            </button>
+          </div>
+        </div>
+      )}
 
       {empty ? (
         <div className="hero">

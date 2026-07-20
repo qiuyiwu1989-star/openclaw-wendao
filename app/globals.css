@@ -514,6 +514,145 @@ textarea::placeholder {
   }
 }
 
+/* ==================== 通话模式 ==================== */
+.call {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: radial-gradient(
+    120% 120% at 50% 30%,
+    var(--bg-soft) 0%,
+    var(--bg) 70%
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fade-in 0.25s ease both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.call-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 24px;
+  text-align: center;
+}
+
+.call-title {
+  font-family: var(--font-serif);
+  letter-spacing: 4px;
+  color: var(--text-faint);
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.call-orb {
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.3s;
+}
+
+.call-orb:active {
+  transform: scale(0.97);
+}
+
+/* 在听：慢呼吸 */
+.call-listening {
+  animation: orb-listen 2.4s ease-in-out infinite;
+}
+@keyframes orb-listen {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 22px transparent;
+  }
+}
+
+/* 在想：快脉冲 + 微亮 */
+.call-thinking {
+  animation: orb-think 1s ease-in-out infinite;
+}
+@keyframes orb-think {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+}
+
+/* 在说：稳定亮起 + 光环 */
+.call-speaking {
+  background: var(--accent);
+  color: #12141a;
+  border-color: var(--accent);
+  animation: orb-speak 1.6s ease-in-out infinite;
+}
+@keyframes orb-speak {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 16px transparent;
+  }
+}
+
+.call-state {
+  font-size: 20px;
+  color: var(--text);
+  letter-spacing: 1px;
+  margin-top: 6px;
+}
+
+.call-hint {
+  font-size: 13px;
+  color: var(--text-faint);
+  min-height: 18px;
+}
+
+.call-end {
+  margin-top: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+  transition: all 0.15s;
+}
+
+.call-end:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
 /* ==================== 404 ==================== */
 .notfound {
   min-height: 100dvh;
