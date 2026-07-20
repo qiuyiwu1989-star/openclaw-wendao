@@ -1,3 +1,5 @@
+import { limitOr429 } from "@/lib/ratelimit";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -11,6 +13,9 @@ const ASR_MODEL = process.env.WENDAO_ASR_MODEL || "mimo-v2.5-asr";
  * 返回转写文本。用 MiMo 而非浏览器 Web Speech API——后者走谷歌服务器，国内被墙。
  */
 export async function POST(req: Request) {
+  const limited = limitOr429(req, "asr", 80);
+  if (limited) return limited;
+
   const apiKey = process.env.LLM_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return jsonErr("未配置 LLM_API_KEY", 500);

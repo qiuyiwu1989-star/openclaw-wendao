@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildSystemPrompt } from "@/lib/persona";
+import { limitOr429 } from "@/lib/ratelimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,9 @@ function sanitize(messages: unknown): IncomingMessage[] {
 }
 
 export async function POST(req: Request) {
+  const limited = limitOr429(req, "chat", 30);
+  if (limited) return limited;
+
   const apiKey = process.env.LLM_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return new Response(

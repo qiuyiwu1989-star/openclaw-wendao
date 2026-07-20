@@ -21,6 +21,7 @@ import {
   Phone,
   PhoneOff,
   RotateCcw,
+  Settings2,
   Square,
   Volume2,
   VolumeX,
@@ -30,6 +31,13 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 const STORAGE_KEY = "wendao.chat.v1";
 const TTS_PREF_KEY = "wendao.tts.on";
+const VOICE_PREF_KEY = "wendao.voice";
+const VOICES = [
+  { id: "苏打", label: "苏打", gender: "男声" },
+  { id: "白桦", label: "白桦", gender: "男声" },
+  { id: "冰糖", label: "冰糖", gender: "女声" },
+  { id: "茉莉", label: "茉莉", gender: "女声" },
+];
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const API_URL = `${BASE}/api/chat`;
 const TTS_URL = `${BASE}/api/tts`;
@@ -66,6 +74,8 @@ export default function Page() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [callMode, setCallMode] = useState(false);
+  const [voice, setVoice] = useState("苏打");
+  const [showVoices, setShowVoices] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speechRef = useRef<SpeechQueue | null>(null);
   const captureRef = useRef<VoiceCapture | null>(null);
@@ -79,6 +89,8 @@ export default function Page() {
       if (raw) setMessages(JSON.parse(raw));
       const pref = localStorage.getItem(TTS_PREF_KEY);
       if (pref === "0") setTtsOn(false);
+      const vp = localStorage.getItem(VOICE_PREF_KEY);
+      if (vp && VOICES.some((v) => v.id === vp)) setVoice(vp);
     } catch {
       /* ignore */
     }
@@ -124,6 +136,7 @@ export default function Page() {
   const newQueue = useCallback((index: number): SpeechQueue => {
     const q = createSpeechQueue({
       url: TTS_URL,
+      voice,
       onStart: () => setSpeaking(index),
       onDrain: () => {
         setSpeaking((cur) => (cur === index ? null : cur));
@@ -133,6 +146,16 @@ export default function Page() {
     });
     speechRef.current = q;
     return q;
+  }, [voice]);
+
+  const pickVoice = useCallback((id: string) => {
+    setVoice(id);
+    setShowVoices(false);
+    try {
+      localStorage.setItem(VOICE_PREF_KEY, id);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   // 手动重听整段：整段作为一句推进队列
@@ -438,6 +461,17 @@ export default function Page() {
 
   const empty = messages.length === 0;
 
+  // 通话屏上显示最近一轮，避免"盲对话"（也能看出 ASR 有没有听错）
+  const lastUserSaid = callMode
+    ? [...messages].reverse().find((m) => m.role === "user")?.content || ""
+    : "";
+  const lastReply =
+    callMode &&
+    messages.length > 0 &&
+    messages[messages.length - 1].role === "assistant"
+      ? messages[messages.length - 1].content
+      : "";
+
   return (
     <div className="app">
       <header className="topbar">
@@ -474,6 +508,36 @@ export default function Page() {
               <VolumeX size={18} strokeWidth={1.7} />
             )}
           </button>
+          <div className="voice-wrap">
+            <button
+              className={"icon-btn" + (showVoices ? " icon-btn-on" : "")}
+              onClick={() => setShowVoices((s) => !s)}
+              title="音色"
+            >
+              <Settings2 size={18} strokeWidth={1.7} />
+            </button>
+            {showVoices && (
+              <>
+                <div
+                  className="voice-backdrop"
+                  onClick={() => setShowVoices(false)}
+                />
+                <div className="voice-pop">
+                  <div className="voice-pop-title">问道的声音</div>
+                  {VOICES.map((v) => (
+                    <button
+                      key={v.id}
+                      className={"voice-item" + (voice === v.id ? " on" : "")}
+                      onClick={() => pickVoice(v.id)}
+                    >
+                      <span>{v.label}</span>
+                      <span className="voice-g">{v.gender}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           {!empty && (
             <button className="icon-btn" onClick={reset} title="新的对话">
               <RotateCcw size={18} strokeWidth={1.7} />
@@ -507,6 +571,14 @@ export default function Page() {
                 ? "点圆圈可打断，直接说"
                 : "说完停一下，问道自然会接话"}
             </div>
+            {(lastUserSaid || lastReply) && (
+              <div className="call-transcript">
+                {lastUserSaid && (
+                  <div className="call-you">你：{lastUserSaid}</div>
+                )}
+                {lastReply && <div className="call-reply">{lastReply}</div>}
+              </div>
+            )}
             <button className="call-end" onClick={endCall}>
               <PhoneOff size={18} strokeWidth={1.9} />
               结束通话

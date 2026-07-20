@@ -1,3 +1,5 @@
+import { limitOr429 } from "@/lib/ratelimit";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -14,6 +16,9 @@ const SAMPLE_RATE = 24000; // MiMo pcm16 流式固定 24kHz 单声道
  * - stream=false：一次性返回完整 wav（降级/兼容用）。
  */
 export async function POST(req: Request) {
+  const limited = limitOr429(req, "tts", 80);
+  if (limited) return limited;
+
   const apiKey = process.env.LLM_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return jsonErr("未配置 LLM_API_KEY", 500);

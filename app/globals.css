@@ -138,6 +138,70 @@ button {
   color: var(--accent);
 }
 
+.voice-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.voice-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.voice-pop {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  z-index: 21;
+  width: 168px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  animation: rise 0.18s ease both;
+}
+
+.voice-pop-title {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+  padding: 6px 8px 8px;
+}
+
+.voice-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.voice-item:hover {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+.voice-item.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.voice-g {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.voice-item.on .voice-g {
+  color: var(--accent);
+}
+
 /* ---------- 消息区 ---------- */
 .scroll {
   flex: 1;
@@ -631,6 +695,30 @@ textarea::placeholder {
   font-size: 13px;
   color: var(--text-faint);
   min-height: 18px;
+}
+
+.call-transcript {
+  margin-top: 22px;
+  max-width: 460px;
+  width: 100%;
+  max-height: 34vh;
+  overflow-y: auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.call-you {
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.call-reply {
+  color: var(--text);
+  font-size: 16.5px;
+  line-height: 1.75;
 }
 
 .call-end {
